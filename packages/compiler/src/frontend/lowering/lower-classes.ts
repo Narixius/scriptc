@@ -1303,7 +1303,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
       const paramProps: NonNullable<ClassInfo["paramProps"]> = [];
 
       const staticFields: ClassInfo["staticFields"] = [];
-      const staticMethods = new Map<string, { params: ParamShape[]; ret: IrType; member: ts.MethodDeclaration }>();
+      const staticMethods: NonNullable<ClassInfo["staticMethods"]> = new Map();
       const staticBlocks: ts.ClassStaticBlockDeclaration[] = [];
       // GENERIC methods (own type parameters), instance and static: only
       // the SYNTAX is checked here — parameter/return types mention the

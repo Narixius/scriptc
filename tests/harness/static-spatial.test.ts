@@ -19,7 +19,7 @@ function run(command: string, args: string[]) {
   return { stdout: result.stdout, stderr, status: result.status, signal: result.signal };
 }
 
-test.each(["native", "wasm32-wasi"])("published spatial queries and output arrays run statically on %s", async (target, context) => {
+test.for(["native", "wasm32-wasi"])("published spatial queries and output arrays run statically on %s", async (target, context) => {
   if (target === "wasm32-wasi" && !hasZig) context.skip();
   const dir = await mkdtemp("/tmp/scriptc-spatial-");
   const previousTarget = process.env["SCRIPTC_TARGET"], previousCc = process.env["SCRIPTC_CC"];

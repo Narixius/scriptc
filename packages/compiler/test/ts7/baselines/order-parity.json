@@ -8698,6 +8698,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-truncate-reuse.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-truncate-reuse.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/async-backend-factory.mjs": {
    "order": [
     "<repo>/tests/corpus/async-backend-factory.mjs"
@@ -9116,9 +9122,21 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-chained-native-results.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-chained-native-results.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-checked-array-reference.js": {
    "order": [
     "<repo>/tests/corpus/js-checked-array-reference.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-number-negation.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-number-negation.mjs"
    ],
    "diags": []
   },
@@ -9193,6 +9211,18 @@
   "<repo>/tests/corpus/js-nested-native-descriptors.js": {
    "order": [
     "<repo>/tests/corpus/js-nested-native-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-nullish-inherited-fields.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-nullish-inherited-fields.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-object-returning-constructors.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-object-returning-constructors.mjs"
    ],
    "diags": []
   },
@@ -9759,6 +9789,12 @@
    "order": [
     "<repo>/tests/corpus/static-field-updates/counter.ts",
     "<repo>/tests/corpus/static-field-updates/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/static-method-receivers.ts": {
+   "order": [
+    "<repo>/tests/corpus/static-method-receivers.ts"
    ],
    "diags": []
   },

@@ -7,8 +7,18 @@ import { bindingNeverReassigned, type FnSig } from "./lower-calls.js";
 /** An ordinary constructor's explicit object return replaces its receiver.
  * Without observing this or new.target, it can use the function's call ABI. */
 export function objectFactorySignature(lowerer: Lowerer, expr: ts.NewExpression): FnSig | null {
-  if (!ts.isIdentifier(expr.expression) || !lowerer.isTopLevelFnSymbol(expr.expression) || lowerer.peekLocal(expr.expression)) return null;
-  const symbol = lowerer.resolveValueSymbol(expr.expression);
+  if (!ts.isIdentifier(expr.expression) || lowerer.peekLocal(expr.expression)) return null;
+  // This probe also sees ordinary classes during global collection. Leave
+  // their deferred diagnostics for the class declaration's lowering.
+  const wasCollecting = lowerer.collecting;
+  let symbol: ts.Symbol | null = null;
+  lowerer.collecting = true;
+  try {
+    if (!lowerer.isTopLevelFnSymbol(expr.expression)) return null;
+    symbol = lowerer.resolveValueSymbol(expr.expression);
+  } finally {
+    lowerer.collecting = wasCollecting;
+  }
   if (!symbol) return null;
   const declaration = lowerer.checker.declarationsOf(symbol).find((node): node is ts.FunctionDeclaration =>
     ts.isFunctionDeclaration(node) && node.body !== undefined,
