@@ -8938,6 +8938,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-property-call-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-property-call-values.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-prototype-data.js": {
    "order": [
     "<repo>/tests/corpus/class-prototype-data.js"
@@ -9302,6 +9308,12 @@
   "<repo>/tests/corpus/indexed-assignment-values.js": {
    "order": [
     "<repo>/tests/corpus/indexed-assignment-values.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/indexed-assignment-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/indexed-assignment-values.ts"
    ],
    "diags": []
   },
@@ -9992,6 +10004,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/prototype-method-overrides.mjs": {
+   "order": [
+    "<repo>/tests/corpus/prototype-method-overrides.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/prototype-named-data-records.ts": {
    "order": [
     "<repo>/tests/corpus/prototype-named-data-records.ts"
@@ -10250,6 +10268,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/typed-array-constructor-alias.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-alias.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/typed-array-constructor-identity.js": {
    "order": [
     "<repo>/tests/corpus/typed-array-constructor-identity.js"
@@ -10259,6 +10283,12 @@
   "<repo>/tests/corpus/typed-array-constructor-union.ts": {
    "order": [
     "<repo>/tests/corpus/typed-array-constructor-union.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-constructor-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-values.mjs"
    ],
    "diags": []
   },
@@ -10277,6 +10307,12 @@
   "<repo>/tests/corpus/typed-array-unknown.ts": {
    "order": [
     "<repo>/tests/corpus/typed-array-unknown.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-prototype-methods.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-prototype-methods.ts"
    ],
    "diags": []
   },

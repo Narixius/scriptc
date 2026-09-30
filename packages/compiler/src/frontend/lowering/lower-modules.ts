@@ -1660,6 +1660,9 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                   (uncheckedOverloadHandleCall(lowerer, decl.initializer) ? JSVAL : null) : null)
                 : null;
             let type = handleT ?? factoryType ?? lowerer.irTypeOf(nameNode);
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
+                ts.isNewExpression(decl.initializer) && lowerer.mapTypeOf(lowerer.typeOf(decl.initializer.expression))?.kind === "dyn" &&
+                !(ts.isIdentifier(decl.initializer.expression) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(decl.initializer.expression)))) type = DYN;
             // Calls through checked function values retain their object
             // identity, including symbol keys absent from inferred records.
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "record" &&
