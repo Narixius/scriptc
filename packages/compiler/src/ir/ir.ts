@@ -1973,16 +1973,18 @@ export const MAY_THROW_BYTES_METHODS: ReadonlySet<IrBytesIntrinsicMethod> = new 
  * capture groups (JS would splice the captured values into the result) —
  * both catchable: backends' may-throw analyses must seed on these two
  * methods like a `throw`. */
-/** `match` takes a STRING receiver with args[0] the regex (non-g/y — the
- * frontend fences literal g/y flags; a g-flagged value reaching the
- * runtime aborts like test()) and produces the PROGRAM-DEPENDENT
- * `string[] | null` union: the matched slice [whole, ...captures] wrapped
- * into the array arm, or the interned null-arm instance for no match. A
+/** `match` takes a STRING receiver with args[0] the regex and produces
+ * the PROGRAM-DEPENDENT `string[] | null` union: all whole matches for a
+ * global regex, otherwise [whole, ...captures], or null for no match. A
  * NONPARTICIPATING capture holds "" where Node's slot is undefined
  * (SEMANTICS.md divergence). Never throws. */
 export type IrRegexIntrinsicMethod =
   | "test"
   | "match"
+  /** exec uses the same string-first operands but keeps the g/y
+   * lastIndex refusal, independently of global String.match iteration. */
+  | "exec"
+  | "lastIndex"
   /** `s.matchAll(re)` — every match as its honest string[] slice (match's
    * rule), drained EAGERLY into a fresh string[][]: the lazy iterator is
    * unobservable across the lowered surface (strings are immutable; the
@@ -2029,7 +2031,9 @@ export type IrLibFn =
   | "weakSet.new"
   | "dyn.fromEntries"
   | "bytes.constructor"
+  | "bytes.instanceOf"
   | "bytes.construct"
+  | "arrayBuffer.constructor"
   | "arrayBuffer.new"
   | "arrayBuffer.is"
   | "arrayBuffer.isView"
@@ -2050,6 +2054,10 @@ export type IrLibFn =
    * consume the native body stream. AbortSignal and ReadableStream values
    * are opaque checked-dynamic handles. */
   | "fetch.start"
+  | "fetch.input"
+  | "fetch.function"
+  | "fetch.requestNew"
+  | "fetch.headersNew"
   | "fetch.responseNew"
   | "fetch.responseArrayBuffer"
   | "fetch.responseJson"
@@ -2059,6 +2067,8 @@ export type IrLibFn =
   | "fetch.abortTimeout"
   | "fetch.abortNow"
   | "fetch.abortAny"
+  | "fetch.webIs"
+  | "fetch.streamIs"
   | "fetch.streamNew"
   | "fetch.streamFrom"
   | "fetch.readerRead"
@@ -2384,6 +2394,7 @@ export type IrLibFn =
    * spec's URIError ("URI malformed"), catchable. Borrow; results +1. */
   | "str.encodeUriComponent"
   | "str.decodeUriComponent"
+  | "str.decodeUri"
   /** RegExp.escape (ES2025): per-code-point EncodeForRegExpEscape —
    * leading ASCII alphanumeric hex-escapes, syntax characters and '/'
    * take a backslash, other punctuators/whitespace/line terminators
@@ -2417,6 +2428,7 @@ export type IrLibFn =
   | "num.toExponential"
   | "num.toFixed0"
   | "num.toFixed"
+  | "num.toStringRadix"
   /** Object.is over two numbers — the spec's SameValue on doubles: NaN
    * equals NaN, +0 differs from -0, everything else is `===`. Plain bool
    * result; never throws. (Union-armed operands take unionEq's sameValue
@@ -2487,6 +2499,7 @@ export type IrLibFn =
    * the for-of/forEach desugar's index reads (live — the loop re-reads
    * sp.size each pass). */
   | "sp.new"
+  | "sp.newChecked"
   | "sp.parse"
   | "sp.copy"
   | "sp.fromPairs"
@@ -2650,6 +2663,9 @@ export type IrLibFn =
   | "child.disconnect"
   | "child.onMessage"
   | "child.onDisconnect"
+  | "child.onSpawn"
+  /** Rest listeners use the checked function bridge to pack event arguments. */
+  | "child.onDyn"
   | "process.connected"
   | "process.send"
   | "process.sendCb"
@@ -2684,6 +2700,7 @@ export type IrLibFn =
   | "child.kill"
   | "child.killNum"
   | "child.unref"
+  | "child.ref"
   /** The piped-output streams (stdio mode 3 — scr_child.c's stream
    * slice). child.stdout/child.stderr answer the checker's
    * `Readable | null` union (type-directed construction in the backend
@@ -3443,6 +3460,7 @@ export type IrLibFn =
    * runtime algorithm string (md5/sha1/sha256); update returns the same
    * handle by retained identity, copy snapshots Hash state, and digest
    * finalizes the handle and returns either a Buffer or encoded string. */
+  | "crypto.native"
   | "crypto.hashNew"
   | "crypto.hmacNewStr"
   | "crypto.hmacNewBytes"
@@ -3485,6 +3503,7 @@ export type IrLibFn =
   /** Buffer.byteLength(string, enc) — enc a NORMALIZED literal like
    * fromStr's — and Buffer.isEncoding(name) over a runtime string
    * (case-insensitive against Node's alias set). Pure; never throw. */
+  | "buffer.byteLenDyn"
   | "buffer.byteLenStr"
   | "buffer.isEncoding"
   /** Buffer.concat(list, totalLength): the concatenation truncated or
@@ -3669,6 +3688,8 @@ export type IrLibFn =
    * apply/call thisArg), or the undefined dyn singleton with none bound
    * (the strict-mode plain-call answer, the old constant). Zero args →
    * dyn (+1). Never throws. */
+  | "dyn.dataViewIs"
+  | "dyn.construct"
   | "dyn.this"
   | "dyn.generatorThis"
   /** process.execPath: the compiled binary's own resolved absolute path
@@ -3685,6 +3706,8 @@ export type IrLibFn =
   | "process.builtinId"
   | "process.builtinModule"
   | "process.builtinUnsupported"
+  | "fs.callbackValue"
+  | "fs.callbackCall"
   | "process.hrtimeValue"
   /** process.versions.node: the runtime's Node COMPATIBILITY TARGET —
    * there is no Node under the binary, so this reports the version whose
@@ -3898,6 +3921,7 @@ export type IrLibFn =
   | "error.hasCause"
   /** Assignment borrows both operands and retains the new cause. */
   | "error.setCause"
+  | "error.defineCause"
   | "error.deleteCause"
   /** The compiler-resolved Node-parity throw for always-throwing lowered
    * arms (ERR_INVALID_THIS receivers, ERR_MISSING_ARGS arity ladders,
@@ -3922,9 +3946,11 @@ export type IrLibFn =
    * f64 result, or a throw. Used by statically lowered numeric coercions
    * whose checker type remained any. */
   | "dyn.numberConstructor"
+  | "dyn.bigintConstructor"
   | "dyn.toNumberCoerce"
   | "dyn.add"
   | "dyn.arithmetic"
+  | "dyn.compare"
   | "dyn.bitwise"
   | "dyn.proxyNew"
   /** A read of a `declare`d const NOTHING defines (the bundler-define
@@ -3997,6 +4023,7 @@ export type IrLibFn =
   | "dyn.propertyIsEnumerable"
   | "dyn.assign"
   | "dyn.copyDataProperties"
+  | "dyn.objectRest"
   /** Variadic Object.assign over CHECKED-DYNAMIC targets (`Object.assign(
    * {}, ...arr.map(f), tail)` — the option-table merge): the lowering
    * builds one fresh dyn pack of sources (packPush retains a plain source
@@ -4017,6 +4044,7 @@ export type IrLibFn =
    * Symbol(Symbol.iterator))"). The frontend picks by position. */
   | "dyn.packPushSpreadIter"
   | "dyn.assignAll"
+  | "dyn.reflectApply"
   /** `Object.create(null)` (scr_json.c): a fresh NULL-PROTOTYPE dyn
    * dictionary. The checked-dynamic tree's OBJ dispatch is already own-member-only —
    * Node's null-proto answer — so the flag's whole job is the observations
@@ -4069,6 +4097,7 @@ export type IrLibFn =
    * The result TYPE is the regex kind, so the link switch pulls the
    * engine exactly like a literal. */
   | "regex.new"
+  | "regex.resetLastIndex"
   | "regex.newChecked"
   /** structuredClone with a NON-EMPTY transfer array of static values:
    * nothing static is transferable, so the call always throws Node's
@@ -4220,6 +4249,8 @@ export type IrLibFn =
   | "readable.unshift"
   | "readable.unshiftStr"
   | "readable.read"
+  | "readable.readDyn"
+  | "stream.onDyn"
   | "readable.pause"
   | "readable.resume"
   | "readable.setEncoding"
@@ -4701,6 +4732,11 @@ export type IrLibFn =
    * lower to buffer.fromStr(s, "utf8") (identical bytes — ScrStr storage
    * is well-formed UTF-8). Borrowed arg; owned (+1) string; never throws. */
   | "text.decode"
+  | "bytes.bufferSource"
+  | "text.decodeBufferSource"
+  | "text.decodeOptions"
+  | "text.decodeStream"
+  | "text.decodeLegacyOptions"
   /** TextDecoder.decode for a compile-time non-UTF-8 WHATWG label. The
    * second f64 is the frontend-owned encoding id consumed by scr_bytes.c;
    * label aliases/case/ASCII whitespace are canonicalized before IR. The
@@ -4708,6 +4744,7 @@ export type IrLibFn =
    * output portable without an ICU/iconv dependency. Borrowed args; owned
    * (+1) string; never throws. */
   | "text.decodeLegacy"
+  | "text.decoderEncoding"
   /** The wider sync fs slice (scr_lib.c), all throwing catchably with
    * Node's errno message shapes and `.code` stamped like the rest of
    * sync fs. unlink/chmod/chown wrap the syscalls 1:1 (Node reports the
@@ -4821,6 +4858,9 @@ export type IrLibFn =
    * pairs like cp.execSync's), cwd ""=inherit. Same event/loop story as
    * cp.spawn. */
   | "cp.spawnOpts"
+  /** Runtime options normalized into the native spawn core; unsupported
+   * process features retain explicit refusals. (command, args, options). */
+  | "cp.spawnDynamic"
   /** Atomics.wait(int32Array, idx, expected, timeoutMs) → "not-equal"
    * when the element differs from `expected`, else a real nanosleep for
    * the timeout and "timed-out" (scr_lib.c). scriptc has no threads —
@@ -6404,6 +6444,7 @@ function canBoxDynCompositeAt(
     case "bytes":
     case "regex":
     case "url":
+    case "searchParams":
       return true;
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion, visiting);
@@ -6491,12 +6532,12 @@ function canDynCheckToAt(
   // serializable. Backends already retain dyn fields and fill missing
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
-  if (t.kind === "bigint" || t.kind === "symbol" || t.kind === "date") return true;
+  if (t.kind === "bigint" || t.kind === "symbol" || t.kind === "date" || t.kind === "searchParams") return true;
   if (t.kind === "map" || t.kind === "set") return canBoxDynComposite(t, getRecord, getUnion, visiting);
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "generator") return true;
-  if (t.kind === "promise") return t.inner.kind === "dyn";
+  if (t.kind === "promise") return t.inner.kind === "dyn" || t.inner.kind === "void" || canDynCheckToAt(t.inner, getRecord, getUnion, visiting);
   if (t.kind === "object" && t.className === "%Error") return true;
   // Native class capsules already support checked extraction at ordinary
   // boundaries. Callable adapters use the same identity/brand check.
@@ -6678,7 +6719,8 @@ export interface RuntimeFeatures {
 }
 
 const DYN_ASYNC_LIB_FNS: ReadonlySet<string> = new Set([
-  "async.awaitDyn", "timers.immediatePromise",
+  "fs.callbackValue", "fs.callbackCall",
+  "async.awaitDyn", "timers.immediatePromise", "crypto.native",
   "process.onUncaughtException", "process.offUncaughtException",
   "process.onUnhandledRejection", "process.offUnhandledRejection",
   "process.onRejectionHandled", "process.offRejectionHandled",
@@ -6712,7 +6754,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     if (node.kind === "libCall") {
       const fn = node.fn;
       if (fn === "regexp.escape" || fn === "dyn.nativeRegexIs") features.regex = true;
-      if (fn === "text.decodeLegacy") features.legacyTextDecoder = true;
+      if (fn === "text.decodeLegacy" || fn === "text.decodeLegacyOptions" || fn === "text.decodeStream") features.legacyTextDecoder = true;
       if (fn.startsWith("fetch.")) features.fetch = true;
       if (PROCESS_EVENT_LIB_FNS.has(fn)) features.processEvents = true;
       if (fn.startsWith("emitter.")) features.emitter = true;
@@ -7123,6 +7165,7 @@ const LIB_MODE_REFUSED_PREFIXES: readonly [string, string][] = [
   // exclude — refuse the surface like the rest of the event-loop family.
   ["fs.existsChk", "the async fs callback surface (fs.exists)"],
   ["fs.renameCb", "the async fs callback surface (fs.rename)"],
+  ["fs.callback", "the async filesystem callback surface"],
   ["zlib.deflateCb", "the async node:zlib callback surface"],
   ["zlib.inflateCb", "the async node:zlib callback surface"],
   ["zlib.deflateRawCb", "the async node:zlib callback surface"],
@@ -7342,6 +7385,14 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "cp.spawnDynamic",
+  "child.onDyn",
+  "text.decoderEncoding",
+  "dyn.construct",
+  "dyn.reflectApply",
+  "text.decodeOptions",
+  "text.decodeStream",
+  "text.decodeLegacyOptions",
   "dyn.nativeSetNew",
   "ffi.argument",
   "ffi.memoryModule",
@@ -7354,6 +7405,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "weakSet.new",
   "dyn.fromEntries",
   "bytes.constructor",
+  "bytes.instanceOf",
+  "buffer.byteLenDyn",
   "bytes.construct",
   "arrayBuffer.new",
   "arrayBuffer.byteLengthGetter",
@@ -7367,6 +7420,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "arrayBuffer.viewF32",
   "arrayBuffer.viewF64",
   "arrayBuffer.viewDV",
+  "bytes.bufferSource",
+  "text.decodeBufferSource",
 
   "bigint.parse",
   "bigint.fromF64",
@@ -7382,12 +7437,15 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "bigint.bufferWrite",
   "bigint.dataViewGet",
   "bigint.dataViewSet",
+  "fetch.requestNew",
+  "fetch.headersNew",
   "fetch.responseNew",
   "fetch.abortTimeout",
   "fetch.abortAny",
   "fetch.streamNew",
   "fetch.streamFrom",
   "num.toFixed",
+  "num.toStringRadix",
   "insp.jsonDyn",
   // diagnostics_channel: publish runs subscribers synchronously (a throw
   // propagates — the documented divergence from triggerUncaughtException);
@@ -7547,6 +7605,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "readable.unshift",
   "readable.unshiftStr",
   "readable.read",
+  "readable.readDyn",
+  "stream.onDyn",
   "readable.resume",
   "readable.pipe",
   "readable.unpipe",
@@ -7602,9 +7662,11 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.objectTag",
   // Numeric coercion runs user valueOf/toString — throws propagate.
   "dyn.numberConstructor",
+  "dyn.bigintConstructor",
   "dyn.toNumberCoerce",
   "dyn.add",
   "dyn.arithmetic",
+  "dyn.compare",
   "dyn.bitwise",
   "dyn.proxyNew",
   "dyn.classBasePrototype",
@@ -7654,6 +7716,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // decodeURIComponent throws the spec's URIError on bad hex/invalid
   // UTF-8 octets (encodeURIComponent never throws — see the IrLibFn doc).
   "str.decodeUriComponent",
+  "str.decodeUri",
   // The base64 globals: atob/btoa throw the catchable DOMException
   // InvalidCharacterError on malformed input; the zero-argument form
   // always throws Node's TypeError [ERR_MISSING_ARGS].
@@ -7678,6 +7741,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.propertyIsEnumerable",
   "dyn.assign",
   "dyn.copyDataProperties",
+  "dyn.objectRest",
   // variadic Object.assign: spread flattening throws V8's spread-call
   // TypeErrors; the final copy throws ToObject on a nullish target
   "dyn.packPushSpread",
@@ -7701,12 +7765,15 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // new RegExp compiles the pattern eagerly: an invalid pattern or flag
   // throws Node's catchable SyntaxError at construction.
   "regex.new",
+  "regex.resetLastIndex",
   "regex.newChecked",
   "dyn.keySet",
   "dyn.keySetComputed",
   "process.builtinId",
   "process.builtinModule",
   "process.builtinUnsupported",
+  "fs.callbackValue",
+  "fs.callbackCall",
   "dyn.keyDelete",
   "dyn.keyDeleteComputed",
   "dyn.hasKeyComputed",
@@ -7753,6 +7820,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // on a row that is not a [name, value] pair. The rest of the sp family
   // never throws.
   "sp.fromPairs",
+  "sp.newChecked",
   "fs.statSync",
   "crypto.randomBytesToString",
   "crypto.randomBytes",

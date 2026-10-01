@@ -18,12 +18,12 @@ import { BOOL, DYN, F64, type IrClassDef, type IrExpr, type IrFunction, type IrG
 import { ENTRY_NAME, PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, newFnCtx, staticImportNamespaceType, uncheckedOverloadHandleCall } from "./lowerer.js";
 import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, funcTypeFromParamShapes, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
-import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
+import { jsBindingHasOpenWrites, hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
 import { objectFactorySignature } from "./object-factory-new.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
 import { stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
 import { isNativeBuiltinValueInitializer } from "./lower-builtin-values.js";
-import { collectNamespaceStmt, nsPathPrefix, trapDeclRootOf } from "./lower-namespaces.js";
+import { collectNamespaceStmt, nsMemberIdentOf, nsPathPrefix, trapDeclRootOf } from "./lower-namespaces.js";
 import { collectExpandoMembers } from "./lower-expando.js";
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
@@ -743,6 +743,24 @@ export function appendForkModules(
     const pendingClasses: string[] = [];
     const pendingShapes: string[] = [];
     const pendingUnions: string[] = [];
+    const boxedChild = (type: IrType, seen = new Set<string>()): boolean => {
+      switch (type.kind) {
+        case "child": return true;
+        case "array": case "set": return boxedChild(type.elem, seen);
+        case "promise": return boxedChild(type.inner, seen);
+        case "map": return boxedChild(type.key, seen) || boxedChild(type.value, seen);
+        case "func": return boxedChild(type.ret, seen);
+        case "record":
+          if (seen.has(type.shapeId)) return false;
+          seen.add(type.shapeId);
+          return lowerer.shapes.get(type.shapeId)?.fields.some((field) => boxedChild(field.type, seen)) ?? false;
+        case "union":
+          if (seen.has(type.unionId)) return false;
+          seen.add(type.unionId);
+          return lowerer.unions.get(type.unionId)?.arms.some((arm) => boxedChild(arm, seen)) ?? false;
+        default: return false;
+      }
+    };
     const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
         for (const item of node) visit(item);
@@ -750,6 +768,10 @@ export function appendForkModules(
       }
       if (node === null || typeof node !== "object") return;
       const rec = node as Record<string, unknown>;
+      if (rec["kind"] === "dynFrom" && boxedChild((rec["value"] as IrExpr).type)) {
+        // A generic child can expose native stdio without importing stream.
+        visit([{ className: "%Readable" }, { className: "%Writable" }]);
+      }
       if (typeof rec["className"] === "string" && !classNames.has(rec["className"])) {
         classNames.add(rec["className"]);
         pendingClasses.push(rec["className"]);
@@ -901,6 +923,10 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   let e: ts.Expression = init;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (checkedGlobalReference(lowerer, e)) return true;
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) &&
+      ["freeze", "seal", "preventExtensions"].includes(e.expression.name.text) &&
+      lowerer.stdlibGlobalMember(e.expression, "Object") !== null && e.arguments[0] &&
+      ts.isArrayLiteralExpression(e.arguments[0])) return true;
   // The built-in Array constructor can create an evolving array whose
   // inferred element type has no native mapping. Its checked reference
   // must remain shared with separately declared functions and aliases.
@@ -926,6 +952,10 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   // callable whose inferred overloads cannot describe one native ABI.
   if ((ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
       ts.isIdentifier(e.expression) && lowerer.globalOf(e.expression)?.type.kind === "dyn") return true;
+  if (ts.isPropertyAccessExpression(e)) {
+    const member = nsMemberIdentOf(lowerer, e);
+    if (member && (lowerer.globalOf(member)?.type.kind === "dyn" || lowerer.genericFnOf(member)?.implicitParams)) return true;
+  }
   // Optional callable reads (for example descriptor?.get) can be held in
   // the same checked slot as a callable. Their nullish arm must remain
   // observable by functions declared outside the module initializer.
@@ -938,6 +968,7 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
       isUnitType(arm) || (arm.kind === "func" && canBoxFuncIntoDyn(arm,
         (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))))) return true;
   }
+  if ((ts.isFunctionExpression(e) || ts.isArrowFunction(e)) && !e.typeParameters?.length && isJsSourceFile(e.getSourceFile())) return true;
   if (ts.isIdentifier(e) || ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
     if (ts.isIdentifier(e)) {
       if (lowerer.globalOf(e)?.type.kind === "dyn") return true;
@@ -1530,6 +1561,22 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
         for (const nameNode of boundIdentifiersOf(decl.name)) {
           const diagsBefore = lowerer.diags.length;
           try {
+            // Checked JavaScript factories can expose inferred callables by
+            // destructuring. Keep each exported binding in module storage so
+            // separately lowered functions see the initialized value.
+            if (isJsSourceFile(sf) && !ts.isIdentifier(decl.name) && decl.initializer &&
+                !decl.type && !hasJsTypeAnnotation(decl) && !lowerer.mapTypeOf(lowerer.typeOf(nameNode))) {
+              const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
+              if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
+                const g: IrGlobal = { id: `%g.${tag}${nsPrefix}${nameNode.text}`, name: nameNode.text,
+                  type: DYN, mutable: isLet, source: bindingSource(nameNode),
+                  ...(!isVarDeclared(decl) ? { tdz: true as const } : {}) };
+                lowerer.globalsBySymbol.set(symbol, g);
+                lowerer.globalsList.push(g);
+                if (isVarDeclared(decl)) noteVarGlobalEntryInit(lowerer, sf, g);
+              }
+              continue;
+            }
             // Builtin declarations do not always describe the concrete native
             // callable ABI. Preserve checked-native values in shared storage;
             // adapting the loader to (string) would replace its validation.
@@ -1583,7 +1630,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             if (isJsSourceFile(sf) && ts.isIdentifier(decl.name) && nameNode === decl.name &&
                 decl.initializer && ts.isObjectLiteralExpression(decl.initializer) &&
                 decl.initializer.properties.some((p) => !ts.isSpreadAssignment(p) &&
-                  (ts.isMethodDeclaration(p) || ts.isAccessor(p) || ts.isComputedPropertyName(p.name)))) {
+                  (ts.isMethodDeclaration(p) || ts.isAccessor(p) || ts.isComputedPropertyName(p.name) ||
+                    ts.isShorthandPropertyAssignment(p) && lowerer.checker.getCallSignatures(lowerer.typeOf(p.name)).length > 0))) {
               const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
               if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
                 const g: IrGlobal = { id: `%g.${tag}${nsPrefix}${nameNode.text}`, name: nameNode.text, type: DYN, mutable: isLet, source: bindingSource(nameNode) };
@@ -1694,9 +1742,16 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
               ts.isIdentifier(decl.name) && nameNode === decl.name && decl.initializer &&
               jsDynHoldableInitializer(lowerer, decl.initializer)
             ) {
-              const fallback = dynFallbackType(lowerer, nameNode, lowerer.typeOf(nameNode));
+              const initializer = decl.initializer;
+              const member = ts.isPropertyAccessExpression(initializer) ? nsMemberIdentOf(lowerer, initializer) : null;
+              const generic = member && lowerer.genericFnOf(member);
+              const fallback = (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) && !initializer.typeParameters?.length
+                ? lowerer.lambdaSignature(initializer).funcType
+                : member && lowerer.globalOf(member)?.type.kind === "dyn" ? DYN
+                : member && generic?.implicitParams ? lowerer.lowerGenericFnValue(member, generic).type
+                : dynFallbackType(lowerer, nameNode, lowerer.typeOf(nameNode));
               const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
-              if (symbol && fallback && (fallback.kind === "func" || fallback.kind === "union") && lowerer.dynConvertible(fallback)) {
+              if (symbol && fallback && (fallback.kind === "dyn" || fallback.kind === "func" || fallback.kind === "union") && lowerer.dynConvertible(fallback)) {
                 if (!lowerer.globalsBySymbol.has(symbol)) {
                   const g: IrGlobal = {
                     id: `%g.${tag}${nsPrefix}${nameNode.text}`, name: nameNode.text,
@@ -1744,6 +1799,11 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             const inferredJsCall = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile()) &&
               !lowerer.mapTypeOf(lowerer.typeOf(nameNode));
             let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
+                (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) &&
+                !decl.initializer.typeParameters?.length) {
+              type = lowerer.lambdaSignature(decl.initializer).funcType;
+            }
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
                 decl.initializer && ts.isCallExpression(decl.initializer) && type.kind === "union") {
               const arms = lowerer.unions.get(type.unionId)?.arms;
@@ -1770,6 +1830,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             // checked factory. Keep that callable boxed instead of asking
             // a fixed-signature adapter to reconstruct its hidden rest ABI.
             if (!decl.type && !hasJsTypeAnnotation(decl) && type.kind === "func" && type.rest === true && type.restAbi === undefined) type = DYN;
+            if (isJsSourceFile(sf) && isLet && !decl.type && !hasJsTypeAnnotation(decl) &&
+                (type.kind === "object" || jsBindingHasOpenWrites(lowerer, decl))) type = DYN;
             // JavaScript call results may retain a checked array supplied by
             // the caller. A typed global here would copy it on extraction.
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "array" &&
@@ -1854,8 +1916,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             if (
               isJsSourceFile(sf) &&
               type.kind === "func" &&
-              type.ret.kind === "record" &&
-              lowerer.dynConvertible(type.ret) &&
+              (type.ret.kind === "date" || type.ret.kind === "record" && lowerer.dynConvertible(type.ret)) &&
               decl.initializer !== undefined &&
               (ts.isFunctionExpression(decl.initializer) || ts.isArrowFunction(decl.initializer)) &&
               decl.initializer.type === undefined &&
