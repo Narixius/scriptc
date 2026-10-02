@@ -10,18 +10,28 @@ export const IR_VERSION = 13 as const;
  * string size limit. API consumers can retain the readable default. */
 export function serializeModule(mod: IrModule, compact = false): string {
   const replacer = (_key: string, value: unknown): unknown => {
-    if (typeof value === "number" && !Number.isFinite(value)) {
+    if (typeof value !== "number") return value;
+    if (!Number.isFinite(value)) {
       return { $nonfinite: Number.isNaN(value) ? "nan" : value > 0 ? "inf" : "-inf" };
     }
     // JSON.stringify(-0) prints "0", silently losing the sign a numLit's
     // f64 semantics depend on (String(-0) is "0" but 1/-0 is -Infinity) —
     // the same sentinel mechanism carries it.
-    if (typeof value === "number" && Object.is(value, -0)) {
+    if (Object.is(value, -0)) {
       return { $nonfinite: "-0" };
     }
     return value;
   };
-  return compact ? JSON.stringify(mod, replacer) : JSON.stringify(mod, replacer, 2);
+  if (!compact) return JSON.stringify(mod, replacer, 2);
+  // A replacer reads through live native views. Serializing the complete
+  // function array through one view refreshes every function capsule for
+  // each element, making large compiler artifacts quadratic. The sentinel
+  // replacer is key-independent, so encode each function as its own root.
+  const header = JSON.stringify({ ...mod, functions: [] }, replacer);
+  const slot = '"functions":[]';
+  const offset = header.indexOf(slot);
+  const functions = mod.functions.map((fn) => JSON.stringify(fn, replacer) ?? "null").join(",");
+  return header.slice(0, offset) + '"functions":[' + functions + "]" + header.slice(offset + slot.length);
 }
 
 export function deserializeModule(json: string): IrModule {
