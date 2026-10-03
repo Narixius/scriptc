@@ -40,7 +40,7 @@ The following sections describe supported forms and their remaining restrictions
 - **Static field updates:** Numeric static fields support `++` and `--` through the declaring class or an immutable alias. Updates through a subclass name are unsupported because JavaScript creates a separate property on the subclass.
 - **Local class expressions:** Static members, decorators, private brands, generic members, explicitly generic factories returning local constructors, and references through the class's internal name are unsupported. Supported expressions preserve fresh constructor identity and shared captures across constructors, methods, accessors, and arrow fields. Local inheritance requires a compiled base class. Constructors retain identity, `typeof`, `name`, and `length` through `unknown`; cast back to their exact type before construction. Construction and static-member access directly through `unknown` are unsupported.
 - **Constructor-function inheritance:** Module-level JavaScript classes can extend compiled ordinary constructor functions. Constructors that return replacement objects, spread `super` arguments, and reflective static inheritance are unsupported. Supported `super` calls preserve receiver and field initialization order and capture the base prototype at class evaluation.
-- **Symbol fields:** Instance fields require a stable module-level `Symbol()` or `Symbol.for()` binding with a literal description or constant string binding. Reassigned keys, runtime-computed descriptions, distinct symbols with the same description in one class, and copying symbol fields with rest/spread or `Object.assign` are unsupported. Equal registry keys share a field across modules. Uninitialized JavaScript fields start as `undefined`; TypeScript fields require an initializer or unconditional constructor assignment. Represented symbol fields and methods, including inherited members, remain accessible through checked values.
+- **Symbol fields:** Instance fields require a stable module-level `Symbol()` or `Symbol.for()` binding with a literal description or constant string binding. Reassigned keys, runtime-computed descriptions, distinct symbols with the same description in one class, and copying symbol fields with rest bindings or `Object.assign` are unsupported. JavaScript object spreads copy represented own symbol fields. Equal registry keys share a field across modules. Uninitialized JavaScript fields start as `undefined`; TypeScript fields require an initializer or unconditional constructor assignment. Represented symbol fields and methods, including inherited members, remain accessible through checked values.
 
 `Promise.all([work(1), work(2)])` infers a tuple. Some tuple operations, such as `.join()`, are unsupported. If you need array operations on the result, declare the input as an array:
 
@@ -111,9 +111,13 @@ A program that passes its project's TypeScript check may still use unsupported o
 
 ### three.js
 
-With `--npm-static=three`, native and WASI builds support CPU math, geometry, scene graphs, materials, and a subset of raycasting. Supported raycasting includes mesh intersections, sorted results, recursive traversal, layers, distance limits, perspective and orthographic camera rays, lines, and points.
+With `--npm-static=three`, native and WASI builds support published package imports and tested CPU workflows for math, bounds, procedural geometry, curves, shapes, extrusion, text geometry, scene graphs, cameras, lights, materials, textures, and render-target data. Mesh workflows include instancing, batching, morph targets, skeletal deformation, LOD, and sprites. Raycasting includes mesh intersections, sorted results, recursive traversal, layers, distance limits, camera rays, lines, and points.
 
-Mesh attribute interpolation can fail when three.js reads beyond the end of a vertex attribute, because numeric fields cannot retain `undefined`. WebGL rendering, browser DOM integration, and native graphics windows are unsupported.
+Animation coverage includes tracks, clips, property binding, mixer playback, blending, and fading. In-memory loading covers scene, material, geometry, and animation JSON, OBJ, STL, PLY, and self-contained glTF/GLB scenes with buffers, PBR material data, and animation. This establishes the exercised workflows, not every loader extension or overload.
+
+Tested CPU graph construction from `three/webgpu` and `three/tsl` includes scalar/vector nodes, mutable uniforms, `Fn` layouts and calls, and `MeshBasicNodeMaterial` data.
+
+WebGL/WebGPU rendering, DOM controls, image and video resources, audio, and worker-based decoders require external host bindings. A browser or native application can render geometry and material state produced by a compiled library and receive its resource lifecycle notifications. Compressed model and texture decoding belongs to that host; shader execution and rendered output are outside the CPU coverage described here.
 
 ## Runtime differences from Node.js
 
@@ -231,6 +235,6 @@ Numbers use JavaScript's double-precision representation. Integer inference and 
 
 ## Browser embedding
 
-Wasm reactors require a host-provided WASI Preview 1 adapter. DOM APIs, browser graphics bindings, and three.js `WebGLRenderer` are unsupported. A reactor can run supported three.js CPU operations while an external web application renders the results.
+Wasm reactors require a host-provided WASI Preview 1 adapter. A reactor can run supported three.js CPU operations and send animated geometry, material state, and resource lifecycle notifications to an external web application through declared imports. The application supplies DOM, graphics, media, audio, and decoder bindings, including the renderer.
 
 Library mode excludes promises, async functions, timers, and the embedded JavaScript engine. See [WebAssembly Modules](/docs/wasm) for the embedding contract.

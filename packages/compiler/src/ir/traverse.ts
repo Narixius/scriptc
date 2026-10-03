@@ -210,9 +210,9 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
     case "dynFromJsval":
       return expr(node.value);
     case "dynCall":
-      return expr(node.callee) && (node.receiver === undefined || expr(node.receiver)) && node.args.every((child) => expr(child));
+      return expr(node.callee) && (node.receiver === undefined || expr(node.receiver)) && (node.calleeNameValue === undefined || expr(node.calleeNameValue)) && node.args.every((child) => expr(child));
     case "dynInvoke":
-      return expr(node.recv) && node.args.every((child) => expr(child));
+      return expr(node.recv) && (node.calleeNameValue === undefined || expr(node.calleeNameValue)) && node.args.every((child) => expr(child));
     case "dynArrLit":
       return node.elems.every((child) => expr(child));
     case "dynObjLit":
@@ -475,12 +475,18 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
     case "dynFromJsval":
       return { ...node, value: expr(node.value) };
     case "dynCall": {
-      const callee = expr(node.callee);
-      if (node.receiver === undefined) return { ...node, callee, args: node.args.map((child) => expr(child)) };
-      return { ...node, callee, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      const result: Extract<IrExpr, { kind: "dynCall" }> = { ...node, callee: expr(node.callee) };
+      if (node.receiver !== undefined) result.receiver = expr(node.receiver);
+      if (node.calleeNameValue !== undefined) result.calleeNameValue = expr(node.calleeNameValue);
+      result.args = node.args.map((child) => expr(child));
+      return result;
     }
-    case "dynInvoke":
-      return { ...node, recv: expr(node.recv), args: node.args.map((child) => expr(child)) };
+    case "dynInvoke": {
+      const result: Extract<IrExpr, { kind: "dynInvoke" }> = { ...node, recv: expr(node.recv) };
+      if (node.calleeNameValue !== undefined) result.calleeNameValue = expr(node.calleeNameValue);
+      result.args = node.args.map((child) => expr(child));
+      return result;
+    }
     case "dynArrLit":
       return { ...node, elems: node.elems.map((child) => expr(child)) };
     case "dynObjLit":

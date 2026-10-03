@@ -3045,6 +3045,14 @@ export function lowerArrayConstructor(lowerer: Lowerer,
     lowerer.noLowering("Array constructor with spread arguments", expr);
   }
   let result = lowerer.mapTypeOf(lowerer.typeOf(expr));
+  // Constructors without a concrete element layout keep their checked
+  // reference. Known element forms retain native arrays, including their
+  // existing sparse storage and indexed property contracts.
+  if (!lowerer.dynamic && isJsSourceFile(expr.getSourceFile()) &&
+      (result?.kind !== "array" || result.elem.kind === "dyn")) {
+    return { kind: "dynCall", callee: { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc },
+      calleeName: "Array", args: args.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
+  }
   if (result?.kind !== "array") {
     const contextual = lowerer.checker.getContextualType(expr);
     if (contextual) result = lowerer.mapTypeOf(contextual);
@@ -3132,7 +3140,7 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
 
 /** Mapper-less checked Array.from: acquire once, then step through emitted
  * property and call dispatch so native class iterators retain their methods. */
-export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false): Extract<IrExpr, { kind: "seqExpr" }> {
+export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false, iterable?: IrExpr): Extract<IrExpr, { kind: "seqExpr" }> {
   const iterator = lowerer.declareHiddenLocal("%fromIterator", DYN);
   const next = lowerer.declareHiddenLocal("%fromNext", DYN);
   const step = lowerer.declareHiddenLocal("%fromStep", DYN);
@@ -3166,7 +3174,7 @@ export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: Src
         { kind: "exprStmt" as const, expr: nodeThrowExpr(1, "", "Array.from mapper is not a function", DYN, loc), loc },
       ], loc },
     ], loc }] : []),
-    { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: "dyn.arrayFromIterator", args: [source], type: DYN, loc }], type: DYN, loc }, loc },
+    { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: iterable ? "dyn.iterator" : "dyn.arrayFromIterator", args: iterable ? [source, iterable] : [source], type: DYN, loc }], type: DYN, loc }, loc },
     { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
     { kind: "varDecl", localId: out.id, init: { kind: "dynArrLit", elems: [], type: DYN, loc }, loc },
     { kind: "varDecl", localId: done.id, init: boolLit(false, loc), loc },
@@ -5779,8 +5787,8 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
       (source.type.kind === "dyn" || source.type.kind === "jsval")) {
     source = lowerer.coerceInto(node, source, STRING);
   }
-  if (source.type.kind === "dyn" && setT.elem.kind === "dyn") {
-    return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [source], type: DYN, loc }, type: setT, loc };
+  if (setT.elem.kind === "dyn" && lowerer.dynConvertible(source.type)) {
+    return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [lowerer.coerceInto(node, source, DYN)], type: DYN, loc }, type: setT, loc };
   }
   if (declared?.kind === "array" && typeEquals(declared.elem, setT.elem)) {
     // Preserve the existing checked scalar-iterable bridge. Reference
@@ -5965,7 +5973,7 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
       return { kind: "call", callee: name, args: [seed], type: mapT, loc };
     }
     if (seed.type.kind === "dyn" || seed.type.kind === "array" &&
-        (seed.type.elem.kind === "dyn" || seed.type.elem.kind === "array")) {
+        !(seed.type.elem.kind === "record" && lowerer.shapes.get(seed.type.elem.shapeId)?.tuple)) {
       const key = `checked-seed:${typeKey(mapT)}`;
       let name = lowerer.mapHofHelpers.get(key);
       if (!name) {
@@ -6353,6 +6361,8 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
     const argNode = call.arguments[0]!;
     const argIr = lowerer.mapTypeOf(lowerer.typeOf(argNode));
     if (argIr?.kind !== "array") return null;
+    const represented = tryLowerExpression(lowerer, argNode);
+    if (represented && !typeEquals(represented.type, argIr)) return null;
     // `Object.fromEntries(rows)` over a `string[][]` VALUE — the env-line
     // idiom (`envArray.map((env) => env.split('='))`). The checker has no
     // tuple to type here (string[] misses the lib's [PropertyKey, T]

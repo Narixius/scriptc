@@ -20,20 +20,20 @@ import { isProvenanceSourceFile } from "../provenance-registry.js";
 import { ambientUndefVarRootOf, lowerImportEquals, nsUndefRead, nsWritableTarget, trapDeclRootOf } from "./lower-namespaces.js";
 import { expandoWritableTarget, lowerExpandoAssignStmt } from "./lower-expando.js";
 import { type ForOfIterProjection, lowerForOfArrayIter, lowerForOfMap, lowerForOfSearchParams, lowerForOfSet, lowerSafeIndexRead, objectIterOverIndexShape, strCharsCall } from "./lower-containers.js";
-import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, implicitLocalFnInfoOf, implicitLocalFnNodeOf, implicitMethodCallInfersReturn, nullishExprUnitOf, nullishGenericBindingUnitOf, recordKeysArrayCall, registerOverloadedCallableAlias } from "./lower-calls.js";
+import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, hasExplicitJsDocReturn, implicitLocalFnInfoOf, implicitLocalFnNodeOf, implicitMethodCallInfersReturn, nullishExprUnitOf, nullishGenericBindingUnitOf, recordKeysArrayCall, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { objectFactorySignature } from "./object-factory-new.js";
 import { isClassCallback, lowerClassCallbackAssign } from "./class-callbacks.js";
-import { classPropertiesHelper } from "./class-dynamic-dispatch.js";
+import { classForInHasKey, classPropertiesHelper } from "./class-dynamic-dispatch.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
 import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
-import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
+import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerIncDec, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
 import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
@@ -88,6 +88,7 @@ function npmStaticReturnedEmptyArrayType(
   while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
   const ownerBody = owner !== undefined && ts.isFunctionLike(owner) ? owner.body : undefined;
   if (ownerBody === undefined || !ts.isBlock(ownerBody)) return null;
+  if (owner && ts.isFunctionLike(owner) && !owner.type && !hasExplicitJsDocReturn(owner)) return null;
   let returned = false;
   ts.walkPreorder(ownerBody, (node) => {
     if (node !== ownerBody && ts.isFunctionLike(node)) return "skip";
@@ -582,7 +583,11 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
       // createServer(h).listen(0, go)` with `go` reading `server`) is a
       // TDZ read until the initializing assign completes — JS exactly.
       if (idx < entry.index || entry.ctx === lowerer.ctx || entry.ctx.tdzPredeclared.has(symbol)) return false;
-      const type = lowerer.irTypeOf(decl.name);
+      let type = lowerer.irTypeOf(decl.name);
+      if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) &&
+          (ts.isObjectLiteralExpression(decl.initializer) ||
+            (ts.isCallExpression(decl.initializer) && ts.isPropertyAccessExpression(decl.initializer.expression) &&
+              decl.initializer.expression.name.text === "assign" && lowerer.isStdlibGlobal(decl.initializer.expression.expression, "Object"))) && lowerer.dynConvertible(type)) type = DYN;
       if (!TDZ_KINDS.has(type.kind) || isUnitType(type)) return false;
       const name = decl.name.text;
       const count = entry.ctx.localCounters.get(name) ?? 0;
@@ -1013,12 +1018,9 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
       // (JS), which the undefined arm carries — tsc only allows the bare
       // form when the return type includes undefined/void. A CHECKED-
       // DYNAMIC return slot holds the dyn undefined directly (the
-      // appendImplicitUndefinedReturn rule). What remains is JS-only —
-      // a JSDoc return claim the body contradicts (ms's parse: `@return
-      // {Number}` with a bare early `return;`): no undefined fits the
-      // declared representation, so the statement fences honestly (the
-      // per-statement JS deferral — the claimed paths still run) instead
-      // of slipping an empty return past the validator.
+      // appendImplicitUndefinedReturn rule). JavaScript signatures include
+      // observed empty returns even when JSDoc omits undefined. Any remaining
+      // incompatible boundary keeps the ordinary per-statement refusal.
       let value: IrExpr | null = null;
       if (stmt.expression) {
         return lowerer.lowerReturnStmt(stmt.expression, locOf(stmt));
@@ -1953,6 +1955,10 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     // scoped TypeScript exception: its declared result/token types are
     // deliberately carried by the checked-dynamic tree, so their ordinary
     // object patterns use the same exact keyed-read desugar.
+    if (srcType.kind === "union" && isJsSourceFile(pattern.getSourceFile()) && lowerer.dynConvertible(srcType)) {
+      lowerer.lowerBindingPattern(pattern, () => lowerer.coerceToExpected(srcRef(), DYN), DYN, isLet, out, dynSpell, allowDynObject);
+      return;
+    }
     if (srcType.kind === "dyn") {
       for (const el of pattern.elements) {
         if (el.name === undefined) continue;
@@ -3465,7 +3471,7 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
           invalid = true;
           return "stop";
         }
-        if (ts.isCallExpression(node.right) && implicitMethodCallInfersReturn(lowerer, node.right)) {
+        if (ts.isCallExpression(node.right) && (implicitMethodCallInfersReturn(lowerer, node.right) || isJsSourceFile(node.right.getSourceFile()))) {
           invalid = true;
           return "stop";
         }
@@ -3706,7 +3712,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       : (declSymbol ? lowerer.globalsBySymbol.get(declSymbol) : undefined);
     if (g) {
       let promotedGlobal = lowerer.runtimeOptionalBindingType(decl.name, g.type);
-      if (g.type.kind === "func" && decl.initializer !== undefined && ts.isIdentifier(decl.initializer)) {
+      if (g.type.kind === "func" && !decl.type && !hasJsTypeAnnotation(decl) &&
+          decl.initializer !== undefined && ts.isIdentifier(decl.initializer)) {
         const sig = lowerer.fnSigOf(decl.initializer);
         if (sig) {
           promotedGlobal = {
@@ -3738,6 +3745,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       const raw = lowerVariableInitializer(lowerer, decl.initializer,
         g.type.kind === "dyn" && (isNativeBuiltinValueInitializer(lowerer, decl.initializer) ||
           ts.isArrayLiteralExpression(decl.initializer) || ts.isObjectLiteralExpression(decl.initializer)) ? DYN : undefined);
+      if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) && raw.type.kind === "dyn" &&
+          (g.type.kind === "record" || g.type.kind === "object")) g.type = DYN;
+      g.type = inferredOptionalRecordType(lowerer, decl, g.type, raw.type);
       const arithmetic = raw.type.kind === "union"
         ? lowerer.unions.get(raw.type.unionId)?.arms
         : undefined;
@@ -3814,7 +3824,11 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       ? lowerer.unions.get(inferredObjectType.unionId)?.arms ?? [] : inferredObjectType ? [inferredObjectType] : [];
     const expandsObject = !decl.type && !hasJsTypeAnnotation(decl) && inferredObjectType !== null &&
       jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn" ||
-      inferredObjectArms.some((arm) => arm.kind === "record" && jsObjectBindingExpands(lowerer, decl, arm));
+      inferredObjectArms.some((arm) => arm.kind === "record" && jsObjectBindingExpands(lowerer, decl, arm)) ||
+      isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) &&
+      ts.isObjectLiteralExpression(decl.initializer) && decl.initializer.properties.some((property) =>
+        ts.isMethodDeclaration(property) || ts.isAccessor(property) || ts.isPropertyAssignment(property) &&
+        (ts.isFunctionExpression(property.initializer) || ts.isArrowFunction(property.initializer)));
     let init: IrExpr;
     try {
       init = expandsObject || (isJsSourceFile(decl.getSourceFile()) && !decl.type &&
@@ -3976,6 +3990,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       type = init.type;
       runtimeOptional = true;
     }
+    if (type !== null) type = inferredOptionalRecordType(lowerer, decl, type, init.type);
     // A JS binding whose checker type spells a FUNCTION but whose VALUE is
     // already checked-dynamic (`const cb = mustCall(fn)` — the helper's
     // return rides its own box): keep the box. Extracting into the spelled
@@ -3987,6 +4002,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
           !decl.type && !hasJsTypeAnnotation(decl) && type.rest === true && type.restAbi === undefined)) {
       type = DYN;
     }
+    if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) && init.type.kind === "dyn" &&
+        (type?.kind === "record" || type?.kind === "object")) type = DYN;
     // A checker-`any` CONST whose initializer lowered to a STATIC type
     // (`const name = rawName ? rawName.replace(...) : null` — the
     // dyn-receiver machinery and the any-ternary join answer static IR):
@@ -4158,6 +4175,20 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       lowerer.runtimeOptionalStorageLocals.add(runtimeOptionalRoot);
     }
     return { kind: "varDecl", localId: local.id, init, loc: locOf(decl) };
+  }
+
+  // lib.d.ts declares named captures as strings, but nonparticipating captures
+  // are undefined. Inferred index records retain that runtime representation;
+  // explicit annotations still require a checked conversion at the boundary.
+  function inferredOptionalRecordType(lowerer: Lowerer, decl: ts.VariableDeclaration, declared: IrType, actual: IrType): IrType {
+    if (decl.type || hasJsTypeAnnotation(decl) || declared.kind !== "record" || actual.kind !== "record") return declared;
+    const target = lowerer.shapes.get(declared.shapeId);
+    const source = lowerer.shapes.get(actual.shapeId);
+    if (!target || !source || target.fields.length || source.fields.length || target.tuple || source.tuple ||
+        !target.indexValue || source.indexValue?.kind !== "union" ||
+        lowerer.armTag(source.indexValue.unionId, UNDEFINED_T) < 0 ||
+        !typeEquals(lowerer.stripUndefinedArm(source.indexValue), target.indexValue)) return declared;
+    return actual;
   }
 
   function lowerVariableInitializer(lowerer: Lowerer, node: ts.Expression, expected?: IrType): IrExpr {
@@ -4414,17 +4445,14 @@ function lowerDynSwitch(lowerer: Lowerer, stmt: ts.SwitchStatement, disc: IrExpr
     if (test.kind === "unitLit") {
       return { kind: "dynTest", test: test.unit, value: stableDisc, type: BOOL, loc: locOf(expression) };
     }
-    if (
-      test.type.kind !== "string" && test.type.kind !== "f64" &&
-      test.type.kind !== "bool" && test.type.kind !== "dyn"
-    ) {
+    if (!lowerer.dynConvertible(test.type)) {
       lowerer.unsupported(
         "SC1100",
         expression,
         "switch case values that cannot compare strictly with 'unknown'",
       );
     }
-    return { kind: "dynScalarEq", left: stableDisc, right: test, type: BOOL, loc: locOf(expression) };
+    return { kind: "dynScalarEq", left: stableDisc, right: lowerer.coerceInto(expression, test, DYN), type: BOOL, loc: locOf(expression) };
   });
 }
 
@@ -5436,6 +5464,13 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           }
           if (!expr.left.questionDotToken) {
             const recv = tryLowerExpression(lowerer, expr.left.expression);
+            if (recv && (recv.type.kind === "dyn" || isJsSourceFile(expr.getSourceFile()) &&
+                recv.type.kind === "union" && lowerer.dynConvertible(recv.type))) {
+              const loc = locOf(expr);
+              return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [lowerer.coerceInto(expr.left.expression, recv, DYN),
+                { kind: "strLit", value: expr.left.name.text, type: STRING, loc },
+                lowerer.lowerExprExpecting(expr.right, DYN)], type: VOID, loc }, loc };
+            }
             if (recv?.type.kind === "object" && recv.type.className === "%Error") {
               const loc = locOf(expr);
               return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [
@@ -5547,6 +5582,15 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       (expr.operator === ts.SyntaxKind.PlusPlusToken ||
         expr.operator === ts.SyntaxKind.MinusMinusToken)
     ) {
+      if (ts.isPropertyAccessExpression(expr.operand) || ts.isElementAccessExpression(expr.operand)) {
+        // Statement and value positions share ToNumeric and reference order.
+        // Namespace/expando globals retain their direct binding path below.
+        const binding = ts.isPropertyAccessExpression(expr.operand)
+          ? expandoWritableTarget(lowerer, expr.operand) ?? nsWritableTarget(lowerer, expr.operand)
+          : null;
+        if (binding) return lowerIncDecToTarget(lowerer, expr, binding);
+        return { kind: "exprStmt", expr: lowerIncDec(lowerer, expr, ts.isPrefixUnaryExpression(expr)), loc: locOf(expr) };
+      }
       // Statement position only: pre/post distinction is unobservable, so
       // both desugar to `x = x ± 1`.
       if (
@@ -8176,9 +8220,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
    *   properties, so the enumeration is honestly EMPTY (zero iterations;
    *   the body typechecked but never evaluates — SEMANTICS.md documents
    *   the divergence).
-   * - class instances fence: which keys exist on one depends on runtime
-   *   property creation (unset declared fields, useDefineForClassFields)
-   *   that the struct model does not track — named, not guessed.
+   * - JavaScript program classes use their live property-creation table.
+   *   TypeScript and runtime-owned layouts keep the class-instance fence.
    * Bindings mirror for-of's: const/let declare the per-iteration string
    * local, `var` assigns the hoisted shared slot, a pre-declared
    * identifier target assigns per pass; destructuring heads are tsc
@@ -8189,7 +8232,16 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     if (stdlibGlobalNameOf(lowerer, stmt.expression) === "globalThis") {
       return { kind: "block", body: [], loc };
     }
-    const receiver = lowerer.lowerExpr(stmt.expression);
+    let receiver = lowerer.lowerExpr(stmt.expression);
+    if (receiver.type.kind === "object") {
+      const info = lowerer.classes.get(receiver.type.className);
+      let root = info;
+      while (root?.base) root = root.base;
+      if (info?.decl && isJsSourceFile(info.decl.getSourceFile()) && !info.def.runtime &&
+          !root?.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream) {
+        receiver = lowerer.coerceToExpected(receiver, DYN);
+      }
+    }
     const recvT = receiver.type;
     if (recvT.kind === "dyn") {
       const recv = lowerer.declareHiddenLocal("%indyn", DYN);
@@ -8198,9 +8250,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         kind: "dynCheck", value: { kind: "libCall", fn: "dyn.forInKeys", args: [ref], type: DYN, loc },
         type: arrayOf(STRING), loc,
       };
-      const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => ({
-        kind: "libCall", fn: "dyn.hasKey", args: [ref, key], type: BOOL, loc,
-      }));
+      const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => classForInHasKey(lowerer, ref, key, loc));
       return { kind: "block", body: [{ kind: "varDecl", localId: recv.id, init: receiver, loc }, loop], loc };
     }
     if (recvT.kind === "array") return lowerForInArray(lowerer, stmt, labels, receiver);

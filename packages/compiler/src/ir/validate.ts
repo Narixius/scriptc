@@ -19,7 +19,7 @@ import type {
   SrcLoc,
 } from "./ir.js";
 import { arrayOf, BYTES_ELEMENT_NAME, BOOL, BYTES_U8, bytesOf, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canExitIslandToType, canMarshalIntoIsland, canMarshalTypedFuncIntoIsland, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DGRAMSOCK_T, DYN, DYN_HANDLE_KINDS, F64, ffiClassType, ffiSourceParamTypes, FILEHANDLE_T, FSWATCHER_T, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, islandPromisePayloadTag, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isJsonSafeType, isJsonStringifySafeType, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, jsOpResultKind, JSVAL, NETSERVER_T, NETSOCKET_T, PROCSTREAM_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, SEARCH_PARAMS_T, SECURECTX_T, shapeHasAccessorSlots, SPAWNRES_T, STATS_T, STRING, SYMBOL_T, TESTCTX_T, typeEquals, typeKey, unionContainerArmsOk, URL_T, VOID } from "./ir.js";
-import { BIGINT_T } from "./ir.js";
+import { BIGINT_T, DYN_CLASS_PROPERTIES } from "./ir.js";
 import { unionWideningTags } from "./analysis.js";
 import { alwaysReturns } from "./control-flow.js";
 
@@ -50,6 +50,7 @@ export const STR_INTRINSIC_SIGS: Record<
   padEnd: { argTypes: [F64, STRING], minArgs: 2, result: STRING },
   toLowerCase: { argTypes: [], minArgs: 0, result: STRING },
   toUpperCase: { argTypes: [], minArgs: 0, result: STRING },
+  normalize: { argTypes: [STRING], minArgs: 1, result: STRING },
   isWellFormed: { argTypes: [], minArgs: 0, result: BOOL },
   toWellFormed: { argTypes: [], minArgs: 0, result: STRING },
   cpAt: { argTypes: [F64], minArgs: 1, result: STRING },
@@ -92,6 +93,10 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "fetch.start": { argTypes: [STRING, DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseNew": { argTypes: [DYN, DYN], result: DYN },
   "fetch.input": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
+  "abort.controllerNew": { argTypes: [], result: DYN },
+  "abort.timeout": { argTypes: [DYN], result: DYN },
+  "abort.now": { argTypes: [DYN], result: DYN },
+  "abort.any": { argTypes: [DYN], result: DYN },
   "fetch.function": { argTypes: [], result: DYN },
   "fetch.requestNew": { argTypes: [DYN, DYN], result: DYN },
   "fetch.headersNew": { argTypes: [DYN], result: DYN },
@@ -159,6 +164,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.defineProperty": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.getOwnPropertyDescriptor": { argTypes: [DYN, DYN], result: DYN },
   "dyn.arrayProtoCall": { argTypes: [DYN, STRING, DYN], result: DYN },
+  "dyn.promiseAll": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "dyn.typeof": { argTypes: [DYN], result: STRING },
   "dyn.objectTag": { argTypes: [DYN], result: STRING },
   "module.registryInit": { argTypes: [F64], result: VOID },
@@ -1209,9 +1215,14 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.packPushSpread": { argTypes: [DYN, DYN, STRING], result: VOID },
   "dyn.packPushSpreadIter": { argTypes: [DYN, DYN], result: VOID },
   "dyn.reflectApply": { argTypes: [DYN, DYN, DYN], result: DYN },
+  "dyn.reflectGet": { argTypes: [DYN, DYN, DYN], result: DYN },
+  "dyn.reflectSet": { argTypes: [DYN, DYN, DYN, DYN], result: BOOL },
+  "dyn.reflectDefine": { argTypes: [DYN, DYN, DYN], result: BOOL },
+  "dyn.abstractEq": { argTypes: [DYN, DYN], result: BOOL },
   "dyn.assignAll": { argTypes: [DYN, DYN], result: DYN },
   "dyn.objCreateNullProto": { argTypes: [], result: DYN },
   "dyn.arrayPrototype": { argTypes: [], result: DYN },
+  "dyn.arrayConstructor": { argTypes: [], result: DYN },
   "dyn.objectPrototype": { argTypes: [], result: DYN },
   "dyn.functionApply": { argTypes: [], result: DYN },
   "dyn.builtinMethod": { argTypes: [STRING, STRING], result: DYN },
@@ -1220,6 +1231,9 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.classInherit": { argTypes: [DYN, DYN], result: DYN },
   "dyn.classSuper": { argTypes: [DYN, DYN, DYN], result: VOID },
   "dyn.assignPrototype": { argTypes: [DYN, DYN, DYN], result: DYN },
+  "dyn.definePrototypeProps": { argTypes: [DYN, DYN, DYN], result: DYN },
+  "dyn.bagGet": { argTypes: [DYN, STRING, DYN], result: DYN },
+  "dyn.bagSet": { argTypes: [DYN, STRING, DYN, DYN], result: VOID },
   "dyn.objCreate": { argTypes: [DYN], result: DYN },
   "dyn.objCreateWithProperties": { argTypes: [DYN, DYN], result: DYN },
   "dyn.getPrototype": { argTypes: [DYN], result: DYN },
@@ -1785,6 +1799,9 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     }
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
+    }
+    if (cls.tracksOwnFields && (cls.runtime || cls.fields.find((field) => field.name === DYN_CLASS_PROPERTIES)?.type.kind !== "dyn")) {
+      errors.push({ message: `class ${cls.name}: field presence tracking requires a native dyn property bag`, loc: cls.loc });
     }
     if (cls.prototypeDataHelper !== undefined) {
       const helper = functionsByName.get(cls.prototypeDataHelper);
@@ -4184,6 +4201,10 @@ function validateFunction(
       }
       case "dynCall": {
         checkExpr(e.callee);
+        if (e.calleeNameValue !== undefined) {
+          checkExpr(e.calleeNameValue);
+          expectType(e.calleeNameValue, STRING, "dynCall callee name");
+        }
         if (e.receiver !== undefined) {
           checkExpr(e.receiver);
           expectType(e.receiver, DYN, "dynCall receiver");
@@ -4211,6 +4232,10 @@ function validateFunction(
       }
       case "dynInvoke": {
         checkExpr(e.recv);
+        if (e.calleeNameValue !== undefined) {
+          checkExpr(e.calleeNameValue);
+          expectType(e.calleeNameValue, STRING, "dynInvoke callee name");
+        }
         expectType(e.recv, DYN, "dynInvoke receiver");
         if (e.type.kind !== "dyn") err(`dynInvoke must be dyn-typed, got ${e.type.kind}`, e.loc);
         for (const a of e.args) {

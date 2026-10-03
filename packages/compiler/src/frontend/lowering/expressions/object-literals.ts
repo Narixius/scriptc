@@ -228,12 +228,21 @@ export function lowerDynObjectLiteral(
     fields = [];
   };
   for (const prop of expr.properties) {
+    if (ts.isPropertyAssignment(prop) && !ts.isComputedPropertyName(prop.name) && prop.name.text === "__proto__") {
+      if (prop.initializer.kind !== ts.SyntaxKind.NullKeyword) lowerer.unsupported("SC1090", prop, "object-literal prototypes other than null (use Object.setPrototypeOf)");
+      flushFields();
+      acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
+      acc = { kind: "libCall", fn: "dyn.setPrototype", args: [acc, lowerer.lowerExprExpecting(prop.initializer, DYN)], type: DYN, loc: locOf(prop) };
+      continue;
+    }
     if (ts.isSpreadAssignment(prop)) {
       flushFields();
       const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);
       const raw = builtin === "path" || builtin === "path/posix" || builtin === "path/win32"
         ? pathModuleValue(lowerer, builtin === "path" ? "path/posix" : builtin, locOf(prop))
-        : lowerer.lowerExpr(prop.expression);
+        : isJsSourceFile(expr.getSourceFile())
+          ? lowerer.lowerExprExpecting(prop.expression, DYN)
+          : lowerer.lowerExpr(prop.expression);
       fenceSymbolFieldCopy(lowerer, prop.expression, raw.type);
       const source = boxValue
         ? boxValue(prop.expression, raw)
@@ -253,6 +262,7 @@ export function lowerDynObjectLiteral(
         key = { kind: "strLit", value: folded, type: STRING, loc: locOf(name) };
       } else {
         let k = lowerer.lowerExpr(name.expression);
+        if (k.type.kind === "union" && lowerer.dynConvertible(k.type)) k = lowerer.coerceToExpected(k, DYN);
         if (k.type.kind === "symbol") k = lowerer.coerceToExpected(k, DYN);
         else if (k.type.kind === "dyn") k = { kind: "libCall", fn: "dyn.propertyKey", args: [k], type: DYN, loc: locOf(name) };
         else if (k.type.kind === "f64" || k.type.kind === "bool") {
@@ -579,6 +589,20 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((prop) =>
       ts.isPropertyAssignment(prop) && lowerer.mapTypeOf(lowerer.typeOf(prop.initializer))?.kind === "array" &&
       tryLowerExpression(lowerer, prop.initializer)?.type.kind === "dyn")) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
+  // A JS constructor parameter can hold omitted values even when its
+  // documentation names a number. Inferred literal fields must preserve
+  // the represented binding rather than checking it back into that type.
+  if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((prop) => {
+    let value = ts.isPropertyAssignment(prop) ? prop.initializer
+      : ts.isShorthandPropertyAssignment(prop) ? prop.name : null;
+    while (value && ts.isParenthesizedExpression(value)) value = value.expression;
+    if (!value || !ts.isIdentifier(value)) return false;
+    const stored = lowerer.peekLocal(value)?.type ?? lowerer.globalOf(value)?.type;
+    const inferred = lowerer.mapTypeOf(lowerer.typeOf(value));
+    return stored?.kind === "dyn" && inferred !== null && inferred.kind !== "dyn" && lowerer.dynConvertible(inferred);
+  })) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
   // JavaScript object methods/accessors carry a live receiver. Keep the
@@ -1147,6 +1171,7 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
       // Number/boolean/unknown keys stringify (ToPropertyKey).
       if (ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name)) {
         let k = lowerer.lowerExpr(prop.name.expression);
+        if (k.type.kind === "union" && lowerer.dynConvertible(k.type)) k = lowerer.coerceToExpected(k, DYN);
         if (k.type.kind === "f64" || k.type.kind === "bool" || k.type.kind === "dyn") {
           k = { kind: "toString", operand: k, type: STRING, loc: locOf(prop.name) };
         }
