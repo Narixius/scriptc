@@ -74,6 +74,10 @@ const programs = [
   "text-codec-values/main.ts",
   "heap-input-aliases.ts",
   "heap-input-collections.ts",
+  "input-lifetime-intervals.ts",
+  "regex-input-lifetimes.ts",
+  "checked-value-input-lifetimes.ts",
+  "checked-dispatch-input-lifetimes.js",
 ];
 
 for (const backend of ["llvm"] as const) {

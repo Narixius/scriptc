@@ -476,6 +476,37 @@ static void test_ref_truncate_cycle(void) {
 #endif
 }
 
+static void test_ref_trace_storage_boundaries(void) {
+  long before = mock_live;
+  ScrArr *arr = scr_arr_new_ref(&mock_cyc_retain, &mock_cyc_release, &mock_trace, 4096);
+  MockRec *dense = mock_cyc_new(1);
+  MockRec *sparse = mock_cyc_new(2);
+  MockRec *property = mock_cyc_new(3);
+  dense->owner = scr_arr_retain(arr);
+  sparse->owner = scr_arr_retain(arr);
+  property->owner = scr_arr_retain(arr);
+  scr_arr_set_ref(arr, 0, dense);
+  scr_arr_set_ref(arr, 3, mock_cyc_retain(dense));
+  scr_arr_set_undefined(arr, 2);
+  scr_arr_set_ref(arr, 4294967294.0, sparse);
+  scr_arr_set_ref(arr, -1, property);
+  scr_collect_cycles();
+  check(mock_live == before + 3, "trace preserves dense, sparse and property edges");
+  check(dense->rc == 2, "trace restores duplicate dense edges exactly");
+
+  scr_arr_set_len(arr, 1);
+  scr_collect_cycles();
+  check(mock_live == before + 2, "truncation releases sparse and duplicate edges");
+  check(dense->rc == 1 && property->rc == 1,
+        "short array preserves its element and named property");
+  scr_arr_set_len(arr, 0);
+  scr_collect_cycles();
+  check(mock_live == before + 1, "zero length keeps the named property");
+  scr_arr_release(arr);
+  scr_collect_cycles();
+  check(mock_live == before, "empty reserved storage and property cycle collected");
+}
+
 static void test_join(void) {
 #ifdef SCR_RC_AUDIT
   long strings0 = scr_str_live_count();
@@ -517,6 +548,36 @@ static void test_join(void) {
   scr_str_release(strs);
   scr_str_release(sep2);
   scr_arr_release(s);
+
+  s = scr_arr_new(SCR_ELEM_STR, 1);
+  ScrStr *shared = scr_str_new("x\0y", 3);
+  scr_arr_set_ref(s, 0, scr_str_retain(shared));
+  scr_arr_set_undefined(s, 1);
+  scr_arr_set_ref(s, 8192, scr_str_retain(shared));
+  scr_arr_set_ref(s, -1, scr_str_new("ignored", 7));
+  sep0 = scr_str_new("", 0);
+  strs = scr_arr_join(s, sep0);
+  check(strs->len == 6 && memcmp(strs->data, "x\0yx\0y", 6) == 0,
+        "join handles sparse values and embedded zero without properties");
+  check(shared->rc == 3 && strs->data[strs->len] == '\0',
+        "join preserves duplicate input owners and terminates final storage");
+  scr_str_release(strs);
+  strs = scr_arr_join(s, sep);
+  check(strs->len == 8198 && strs->data[3] == ',' && strs->data[8195] == 'x',
+        "join sizing includes separators for sparse holes and undefined");
+  scr_str_release(strs);
+  scr_arr_release(s);
+  scr_str_release(shared);
+  scr_str_release(sep0);
+
+  n = scr_arr_new(SCR_ELEM_F64, 0);
+  for (size_t i = 0; i < 300; i++) scr_arr_push_f64(n, 123.5);
+  nums = scr_arr_join(n, sep);
+  check(nums->len == 1799 && nums->data[1799] == '\0' &&
+        memcmp(nums->data + 1794, "123.5", 5) == 0,
+        "numeric join grows final storage without losing its suffix");
+  scr_str_release(nums);
+  scr_arr_release(n);
 
   scr_str_release(sep);
 #ifdef SCR_RC_AUDIT
@@ -688,6 +749,7 @@ int main(int argc, char **argv) {
   test_ref_elements();
   test_ref_cycle();
   test_ref_truncate_cycle();
+  test_ref_trace_storage_boundaries();
   test_join();
   test_sparse_holes();
 
