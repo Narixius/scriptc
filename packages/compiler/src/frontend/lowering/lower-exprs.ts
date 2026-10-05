@@ -5095,6 +5095,14 @@ export function lowerOptionalNumber(
           if (resultType?.kind === "string") {
             return { kind: "strIntrinsic", method: "charAt", receiver: recv, args: [index], type: STRING, loc: locOf(expr) };
           }
+          // A JS-inferred `s[i]` types as `any` (the checker keeps no
+          // element type for an index signature it can't pin), so mapType
+          // answers null. The VALUE is always a string-or-undefined; lower
+          // it as charAt's string (the documented out-of-range divergence)
+          // so the read composes like `s.charAt(i)`.
+          if (resultType === null || resultType?.kind === "dyn") {
+            return { kind: "strIntrinsic", method: "charAt", receiver: recv, args: [index], type: STRING, loc: locOf(expr) };
+          }
           if (resultType?.kind === "union") {
             const arms = lowerer.unions.get(resultType.unionId)?.arms;
             if (arms?.length === 2 && lowerer.armTag(resultType.unionId, STRING) >= 0 && lowerer.armTag(resultType.unionId, UNDEFINED_T) >= 0) {
@@ -8856,7 +8864,7 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
       // (itself — no descendants can flow into the slot), so the answer
       // folds statically exactly like the named-target folds below.
       const rhsClassval = storedClassValueType(lowerer, expr.right);
-      if (rhsClassval?.kind === "classval" && !lowerer.caughtLocalOf(expr.left)) {
+      if (rhsClassval?.kind === "classval") {
         const targetInfo = lowerer.classes.get(rhsClassval.className);
         if (!targetInfo) {
           // The type world names a class the lowering never registered
@@ -8868,6 +8876,29 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
             expr,
             "'instanceof' against a class value whose class has no lowering (the class declaration itself was rejected — see its own diagnostic)",
           );
+        }
+        // A catch binding on the left of a class-VALUE test: the same
+        // preorder-interval test the named-target path runs, resolved from
+        // the class expression's own ClassInfo (`error instanceof CLIError`,
+        // where CLIError is a `var X = class extends Error` binding).
+        const classvalCaught = lowerer.caughtLocalOf(expr.left);
+        if (classvalCaught) {
+          if (!lowerer.inHierarchy(targetInfo)) {
+            lowerer.unsupported(
+              "SC1090",
+              expr,
+              `'instanceof' on a catch binding against the standalone class '${targetInfo.def.name}' ` +
+                `(only classes in extends hierarchies carry the vtable the payload test needs)`,
+            );
+          }
+          return {
+            kind: "caughtTest",
+            value: { kind: "varRef", localId: classvalCaught.id, type: CAUGHT, loc },
+            test: "instanceof",
+            className: targetInfo.def.name,
+            type: BOOL,
+            loc,
+          };
         }
         const left = lowerer.lowerExpr(expr.left);
         if (left.type.kind === "dyn") {

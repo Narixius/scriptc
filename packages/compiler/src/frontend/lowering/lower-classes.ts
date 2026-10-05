@@ -7,7 +7,7 @@ import { InternalCompilerError } from "../../errors.js";
 import * as ts from "../ts7/adapter.js";
 import type { FnCtx, Lowerer } from "./lowerer.js";
 import { BOOL, DATE_T, DYN, F64, bytesOf, type IrClassDef, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
-import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArguments, generatorMeta, genericCallInstance, hasExplicitJsDocReturn, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
+import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bindingNeverReassigned, bodyReadsArguments, generatorMeta, genericCallInstance, hasExplicitJsDocReturn, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey, withUnitArm } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
 import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, nodeThrowExpr, own } from "./lowerer.js";
@@ -81,8 +81,14 @@ export function storedClassValueType(lowerer: Lowerer, expression: ts.Expression
     const stored = lowerer.peekLocal(expression) ?? lowerer.globalOf(expression);
     if (stored?.type.kind === "classval" && lowerer.classes.has(stored.type.className)) return stored.type;
     const symbol = lowerer.resolveValueSymbol(expression);
+    // A class-expression binding is a stable class VALUE when the binding is
+    // a const OR a var/let nothing reassigns. JS packages commonly spell the
+    // class-expression idiom with `var` (`var CLIError = class extends Error`
+    // — citty's arg parser), and `instanceof` against it must resolve to the
+    // same program class a `const` would.
     const declaration = symbol && lowerer.checker.declarationsOf(symbol).find((decl) =>
-      ts.isVariableDeclaration(decl) && decl.initializer && (ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) !== 0);
+      ts.isVariableDeclaration(decl) && decl.initializer &&
+      ((ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) !== 0 || bindingNeverReassigned(lowerer, symbol, decl)));
     if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) {
       const value = storedClassValueType(lowerer, declaration.initializer, visiting);
       if (value?.kind === "classval") return value;

@@ -1636,13 +1636,12 @@ void scr_dyn_proxy_set(ScrDyn *proxy, ScrStr *key, ScrDyn *value) {
   ScrDyn *trap = scr_dyn_proxy_trap(proxy, "set");
   if (scr_exc_pending()) return;
   if (!trap) {
-    if (proxy->v.proxy.target->kind == SCR_DYN_TYPED_REF) {
-      scr_dyn_key_set(proxy->v.proxy.target, key, value);
-      return;
-    }
-    /* OrdinarySet uses the Proxy receiver's [[GetOwnProperty]] and
-     * [[DefineOwnProperty]]. Keep that boundary explicit for now. */
-    scr_dyn_proxy_unsupported("assignment without a set trap");
+    /* No `set` trap: OrdinarySet forwards the write to the target (the
+     * receiver is this Proxy, but for the checked-dynamic targets the
+     * runtime holds — plain objects and arrays — setting on the target is
+     * the same [[Set]] answer; e.g. citty's arg-alias Proxy is built with a
+     * get-only handler and assigns through it). */
+    scr_dyn_key_set(proxy->v.proxy.target, key, value);
     return;
   }
   ScrDyn *property = scr_dyn_new_str(key);
