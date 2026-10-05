@@ -7445,6 +7445,25 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     return { kind: "numLit", value, type: F64, loc: locOf(expr) };
   }
 
+/** True iff `e` is `process.stdin`, possibly through a `const x =
+ * process.stdin` local snapshot (the NodeTerminal `stdin` alias). */
+function receiverIsProcessStdin(lowerer: Lowerer, e: ts.Expression): boolean {
+  const strip = (n: ts.Expression): ts.Expression => {
+    let cur = n;
+    while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isTypeAssertion(cur)) cur = cur.expression;
+    return cur;
+  };
+  const node = strip(e);
+  if (ts.isPropertyAccessExpression(node)) return lowerer.stdlibGlobalMember(node, "process") === "stdin";
+  if (!ts.isIdentifier(node)) return false;
+  const sym = lowerer.checker.getSymbolAtLocation(node);
+  if (sym === undefined) return false;
+  const decl = lowerer.checker.declarationsOf(sym).find((d) => ts.isVariableDeclaration(d));
+  if (decl === undefined || !ts.isVariableDeclaration(decl) || decl.initializer === undefined) return false;
+  const init = strip(decl.initializer);
+  return ts.isPropertyAccessExpression(init) && lowerer.stdlibGlobalMember(init, "process") === "stdin";
+}
+
 /** `process.stdin/stdout/stderr.isTTY` → isatty(3) on the stream's fd
    * (a REAL boolean: Node's non-TTY streams expose `undefined` here — the
    * documented divergence; truthiness tests, the actual usage, agree), and
@@ -7463,6 +7482,13 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     if (expr.questionDotToken) return null;
     const member = expr.name.text;
     const direct = ts.isPropertyAccessExpression(expr.expression) ? lowerer.stdlibGlobalMember(expr.expression, "process") : null;
+    // process.stdin.readableEnded (direct, or through a `const stdin =
+    // process.stdin` local): the runtime's stdin EOF/destroyed state.
+    // effect/cli's NodeTerminal probes it at construction; the generic dyn
+    // key read would answer undefined and the boolean dynCheck would throw.
+    if (member === "readableEnded" && (direct === "stdin" || receiverIsProcessStdin(lowerer, expr.expression))) {
+      return { kind: "libCall", fn: "stdin.readableEnded", args: [], type: BOOL, loc: locOf(expr) };
+    }
     if (isJsSourceFile(expr.getSourceFile()) &&
         (direct === "stdin" || direct === "stdout" || direct === "stderr" ||
          lowerer.mapTypeOf(lowerer.typeOf(expr.expression))?.kind === "procStream")) {

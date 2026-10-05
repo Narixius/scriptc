@@ -3956,6 +3956,9 @@ export type IrLibFn =
    * exit. Never throws itself; awaiting it re-throws nothing (stdin
    * errors surface through 'error' listeners, not the iterator). */
   | "stdin.nextChunk"
+  /** `process.stdin.readableEnded` — the runtime's stdin EOF/destroyed
+   * state as a boolean (NodeTerminal's `stdin.readableEnded` probe). */
+  | "stdin.readableEnded"
   /** The runtime-provided Error hierarchy's entry points (scr_error.c).
    * error.new: one borrowed string arg (the message), result an owned (+1)
    * builtin error instance — the result TYPE names which builtin class

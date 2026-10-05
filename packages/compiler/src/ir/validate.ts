@@ -227,6 +227,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "stdin.onEnd": { argTypes: [{ kind: "func", params: [], ret: VOID }, BOOL], result: VOID },
   "stdin.onError": { argTypes: [null, BOOL], result: VOID },
   "stdin.nextChunk": { argTypes: [], result: { kind: "promise", inner: BYTES_U8 } },
+  "stdin.readableEnded": { argTypes: [], result: BOOL },
   "fs.readFileSync": { argTypes: [STRING, STRING], result: STRING },
   "fs.readFileSyncBuf": { argTypes: [STRING], result: BYTES_U8 },
   "fs.readFileSyncDyn": { argTypes: [STRING, DYN], result: DYN },

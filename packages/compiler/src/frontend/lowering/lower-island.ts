@@ -3417,6 +3417,14 @@ export function lowerStaticReadableStreamReaderCall(
         const inferred = lowerer.mapTypeOf(lowerer.typeOf(spread.expression));
         if (inferred?.kind === "array" && inferred.elem.kind === "f64") {
           src = lowerer.coerceInto(spread.expression, src, inferred);
+        } else {
+          // An `any[]`/`unknown` array (`rows.map(...)` over an untyped JS
+          // receiver): validate it as a number[] at the boundary — the same
+          // checked-dynamic walk a typed slot would run — so the fold stays
+          // a static runtime call. A non-numeric element throws Node's
+          // TypeError instead of silently mis-folding.
+          const asNumbers = lowerer.coerceToExpected(src, { kind: "array", elem: F64 });
+          if (asNumbers.type.kind === "array" && asNumbers.type.elem.kind === "f64") src = asNumbers;
         }
       }
       if (src.type.kind !== "array" || src.type.elem.kind !== "f64") {

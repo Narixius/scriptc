@@ -15,7 +15,7 @@ import type { Lowerer } from "./lowerer.js";
 import { captureContextArguments } from "./function-context.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
-import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, type IrBytesElem, type IrExpr, type IrFunction, type IrJsOp, type IrLocal, type IrRecordShape, type IrStmt, type IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, type IrBytesElem, type IrExpr, type IrFunction, type IrJsOp, type IrLocal, type IrRecordShape, type IrStmt, type IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, type SrcLoc, UNDEFINED_T, URL_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, type CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
@@ -1205,9 +1205,14 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       }
       {
         const sym = lowerer.checker.getSymbolAtLocation(expr);
-        if (lowerer.isStdlibSymbol(sym) || expr.text === "globalThis") {
+        // A `const x = <stdlib global>` alias (e.g. `const globalProcess =
+        // globalThis.process`, CliOutput's color probe): the binding IS the
+        // global, so a bare read lowers exactly like the global's own
+        // spelling (member reads already resolve through the alias).
+        const globalName = stdlibGlobalNameOf(lowerer, expr);
+        if (lowerer.isStdlibSymbol(sym) || expr.text === "globalThis" || globalName !== null) {
           if (isJsSourceFile(expr.getSourceFile())) {
-            const canonical = stdlibGlobalNameOf(lowerer, expr) ?? expr.text;
+            const canonical = globalName ?? expr.text;
             return { kind: "strLit", value: `[builtin ${canonical}]`, type: STRING, loc };
           }
           // In a dynamic TypeScript build, the real global object is the
@@ -1993,6 +1998,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           if (!lowerer.dynamic && canonical === "ArrayBuffer") return { kind: "libCall", fn: "arrayBuffer.constructor", args: [], type: DYN, loc };
           if (!lowerer.dynamic && canonical === "fetch") return { kind: "libCall", fn: "fetch.function", args: [], type: DYN, loc };
           if (!lowerer.dynamic && Object.values(BYTES_ELEMENT_NAME).includes(canonical)) return { kind: "libCall", fn: "bytes.constructor", args: [{ kind: "strLit", value: canonical, type: STRING, loc }], type: DYN, loc };
+          // The WHATWG constructor globals taken as VALUES: `effect/Schema`
+          // stores `globalThis.URL` / `globalThis.URLSearchParams` as the
+          // captured constructor of its `instanceOf` predicates, and the
+          // checker types that slot as the url/searchParams handle. Give the
+          // globals a handle-typed value (the compiled program's constructor
+          // surface for them) so the module initializes; `instanceof URL`
+          // itself keeps lowering through dyn.nativeUrlIs.
+          if (!lowerer.dynamic && canonical === "URL") return { kind: "libCall", fn: "url.new", args: [{ kind: "strLit", value: "about:blank", type: STRING, loc }], type: URL_T, loc };
+          if (!lowerer.dynamic && canonical === "URLSearchParams") return { kind: "libCall", fn: "sp.parse", args: [{ kind: "strLit", value: "", type: STRING, loc }], type: SEARCH_PARAMS_T, loc };
           return { kind: "strLit", value: `[builtin ${canonical}]`, type: STRING, loc };
         }
       }

@@ -712,6 +712,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "fs.mkdirRecursiveModeSync": "scr_fs_mkdir_recursive_mode",
   "atomics.wait": "scr_atomics_wait",
   "process.stdinDestroy": "scr_process_stdin_destroy",
+  "stdin.readableEnded": "scr_stdin_ended",
   "process.stdinSetRawMode": "scr_process_stdin_set_raw_mode",
   // node:events EventEmitter (scr_events_emitter.c): receivers borrowed,
   // chaining forms answer the receiver +1 (Node's `return this`). The
